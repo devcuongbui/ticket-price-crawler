@@ -1,21 +1,16 @@
 """
-Script 1: Fetch danh sách phim (REST API — không cần browser)
 Script 2: ZaloPay Showtime Crawler (Playwright DOM)
 Target: https://zalopay.vn/dat-ve-phim
 
-Script 1 — fetch_movies_api():
-  Gọi REST API công khai của ZaloPay để lấy toàn bộ phim đang chiếu,
-  xóa collection movies cũ và insert lại. Không cần browser.
+Dùng Playwright thao tác DOM để lấy suất chiếu và giá vé từ ZaloPay.
+Chỉ cập nhật prices.zalopay trong showtimes collection.
 
-Script 2 — crawl_zalopay():
-  Dùng Playwright thao tác DOM để lấy suất chiếu và giá vé từ ZaloPay.
-  Chỉ cập nhật prices.zalopay trong showtimes collection.
+Danh sách phim được lấy từ Script 1 (crawler/movies_fetcher.py).
 """
 import asyncio
 import logging
 
-import httpx
-
+from crawler.movies_fetcher import fetch_movies_api
 from crawler.transformer import transform_movie, transform_cinema, transform_showtime
 from crawler.interceptor import ApiInterceptor
 import crawler.extractor as extractor
@@ -23,31 +18,7 @@ import crawler.extractor as extractor
 logger = logging.getLogger(__name__)
 
 ZALOPAY_URL = "https://zalopay.vn/dat-ve-phim"
-ZALOPAY_MOVIES_API = "https://zlp-movie-api.zalopay.vn/v2/movie/web/data/film/showing"
 PLATFORM = "zalopay"
-
-_API_HEADERS = {
-    "origin": "https://zalopay.vn",
-    "referer": "https://zalopay.vn/",
-    "user-agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
-    ),
-}
-
-
-async def fetch_movies_api() -> list[dict]:
-    """
-    Gọi REST API để lấy danh sách phim đang chiếu.
-    Không cần Playwright — API trả JSON trực tiếp.
-    """
-    async with httpx.AsyncClient(headers=_API_HEADERS, timeout=15) as client:
-        resp = await client.get(ZALOPAY_MOVIES_API)
-        resp.raise_for_status()
-        body = resp.json()
-    movies = body.get("data") or []
-    logger.info(f"[ZaloPay] API returned {len(movies)} movies")
-    return movies
 
 
 async def crawl_zalopay(context, db, city: str = "Hải Phòng") -> None:
