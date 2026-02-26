@@ -67,6 +67,12 @@ class MovieDB:
 
     # ── Movies ────────────────────────────────────────────────────────────────
 
+    async def clear_showtimes(self) -> int:
+        """Xóa toàn bộ showtimes collection. Trả về số documents đã xóa."""
+        result = await self.db.showtimes.delete_many({})
+        logger.info(f"Showtimes cleared: {result.deleted_count} documents deleted")
+        return result.deleted_count
+
     async def replace_all_movies(self, docs: list[dict]) -> tuple[int, int]:
         """
         Xóa toàn bộ movies cũ và insert lại từ đầu.
@@ -146,28 +152,26 @@ class MovieDB:
             "format":   fmt,
             "seatType": seat_type,
         }
+        # Dùng update pipeline (MongoDB 4.2+):
+        # - $ifNull để set base fields chỉ khi insert mới (không overwrite existing)
+        # - platform price luôn được set (overwrite) — đây là intent chính
+        other_platforms = [p for p in ("momo", "zalopay", "vnpay") if p != platform]
+        set_stage = {
+            "id":       {"$ifNull": ["$id", showtime_id]},
+            "movieId":  movie_id,
+            "cinemaId": cinema_id,
+            "date":     date,
+            "time":     time,
+            "format":   fmt,
+            "seatType": seat_type,
+            f"prices.{platform}": price,
+        }
+        for p in other_platforms:
+            set_stage[f"prices.{p}"] = {"$ifNull": [f"$prices.{p}", None]}
+
         await self.db.showtimes.update_one(
             filter_doc,
-            {
-                "$set": {
-                    f"prices.{platform}": price,
-                },
-                "$setOnInsert": {
-                    "id":       showtime_id,
-                    "movieId":  movie_id,
-                    "cinemaId": cinema_id,
-                    "date":     date,
-                    "time":     time,
-                    "format":   fmt,
-                    "seatType": seat_type,
-                    "prices": {
-                        "momo":    None,
-                        "zalopay": None,
-                        "vnpay":   None,
-                        platform:  price,
-                    },
-                },
-            },
+            [{"$set": set_stage}],
             upsert=True,
         )
 

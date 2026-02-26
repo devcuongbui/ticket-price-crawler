@@ -13,6 +13,8 @@ env/
 # Test scripts & debug data
 test/
 debug_responses/
+debug_*.html
+debug_*.py
 
 # IDE
 .vscode/

@@ -5,8 +5,13 @@ Target: https://vnpay.vn/ve-xem-phim
 Dùng Playwright thao tác DOM để lấy suất chiếu và giá vé từ VNPay.
 Chỉ cập nhật prices.vnpay trong showtimes collection.
 """
+from __future__ import annotations
 import asyncio
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from playwright.async_api import Page
 
 from crawler.transformer import transform_movie, transform_cinema, transform_showtime
 from crawler.interceptor import ApiInterceptor

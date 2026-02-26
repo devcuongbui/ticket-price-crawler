@@ -42,22 +42,36 @@ _CHAIN_FAKE_PRICE = {
 SEL_CITY_BTN       = "button:has(p.text-blue-500)"           # button thành phố đang chọn
 SEL_CITY_HAIPHONG  = "span.label-bold-large.text-white"      # span Hải Phòng trong dropdown
 
-# Cinema groups (CGV / Lotte / Galaxy)
-SEL_CINEMA_GROUP   = "div.flex.overflow-auto button[data-gtm-movie-value]"
+# Chain switcher buttons (3 buttons: CGV / Lotte / Galaxy Cinema)
+# Grandparent của img[data-gtm-movie-value]: <button class="relative mr-1 ...">
+# Active chain có border-[#00FF95], inactive có class="relative mr-1 false"
+SEL_CHAIN_BTN      = "button.relative.mr-1"                  # tất cả chain buttons
 
-# Cinema list items (panel trái)
-SEL_CINEMA_ITEM    = "ul li button span#movie-cinema-button"
+# Cinema list items (sidebar trái) — click để switch panel phải
+# <span id="movie-cinema-button" ...>CGV Aeon Mall Hải Phòng</span>
+SEL_CINEMA_ITEM    = "span#movie-cinema-button"
+
+# Cinema panel active (panel phải) — container có h3 tên rạp + date slider
+# Dùng id="date-selection" vì đây là element unique trong panel active
+SEL_CINEMA_PANEL   = "div:has(div#date-selection)"
+
+# Tên rạp trong panel: <p class="text-white text-sm leading-[18px]">
+SEL_CINEMA_NAME    = "p.text-white.text-sm"
+# Địa chỉ rạp: <label class="text-dark-300 text-sm ...">
+SEL_CINEMA_ADDR    = "label.text-dark-300"
+# Logo rạp — img với data-gtm-movie-value (CGV / Lotte / Galaxy Cinema)
+SEL_CINEMA_LOGO    = "img[data-gtm-movie-value]"
 
 # Date buttons
 SEL_DATE_BTN       = "button#movie-date-button"
 
-# Movie sections (panel phải) - mỗi section có 1 phim
-SEL_MOVIE_SECTION  = "div.flex.flex-col.mt-3"
+# Movie sections - mỗi section có 1 phim
+SEL_MOVIE_SECTION  = "div.flex.flex-col.mt-3:has(a[href*='/dat-ve-phim/chi-tiet/'])"
 SEL_MOVIE_HREF     = "a[href*='/dat-ve-phim/chi-tiet/']"
 SEL_MOVIE_TITLE    = "h3.font-bold.text-base.text-white"
 
-# Format group header (h3 bên trong movie section)
-SEL_FORMAT_GROUP   = "div.mt-3"
+# Format group: div chứa h3 format + grid session buttons
+SEL_FORMAT_GROUP   = "div.mt-3:has(button#movie-session-button)"
 SEL_FORMAT_HEADER  = "h3.font-bold.text-white"
 
 # Session buttons
@@ -160,9 +174,10 @@ async def _ensure_city(page) -> bool:
 
 # ── Showtime extraction ────────────────────────────────────────────────────────
 
-async def _extract_showtimes_from_panel(page, date_str: str, cinema_id: str, movie_id_map: dict, chain: str = "") -> list[dict]:
+async def _extract_showtimes_from_panel(panel, date_str: str, cinema_id: str, movie_id_map: dict, chain: str = "") -> list[dict]:
     """
-    Đọc toàn bộ movie sections trong panel phải cho một ngày đã chọn.
+    Đọc toàn bộ movie sections trong panel của 1 rạp cụ thể cho ngày đã chọn.
+    panel: ElementHandle của cinema panel (scoped query, tránh lẫn với rạp khác)
     movie_id_map: {api_id_str: movie_doc_id}  e.g. {"5094": "movie-5094"}
     chain: tên chain để tra giá fake (CGV / Lotte / Galaxy Cinema)
     Trả về list entries cho bulk_upsert_showtime_prices.
@@ -171,13 +186,10 @@ async def _extract_showtimes_from_panel(page, date_str: str, cinema_id: str, mov
     entries = []
     await asyncio.sleep(1.2)
 
-    try:
-        await page.wait_for_selector(SEL_MOVIE_SECTION, timeout=8000)
-    except Exception:
+    sections = await panel.query_selector_all(SEL_MOVIE_SECTION)
+    if not sections:
         logger.debug(f"[ZaloPay] No movie sections found for {date_str}")
         return entries
-
-    sections = await page.query_selector_all(SEL_MOVIE_SECTION)
 
     for section in sections:
         # Lấy movie_id từ href
@@ -249,41 +261,44 @@ async def _extract_showtimes_from_panel(page, date_str: str, cinema_id: str, mov
     return entries
 
 
-# ── Date iteration ─────────────────────────────────────────────────────────────
+# ── Per-panel date iteration ───────────────────────────────────────────────────
 
-async def _crawl_cinema_dates(page, cinema_id: str, cinema_name: str, movie_id_map: dict, db, chain: str = "") -> int:
+async def _crawl_cinema_dates_in_panel(panel, page, cinema_id: str, cinema_name: str, movie_id_map: dict, db, chain: str = "") -> int:
     """
-    Lấy tất cả date buttons, click từng cái và extract showtimes.
-    Trả về tổng số showtime entries đã lưu.
+    Lấy date buttons bên trong panel của rạp, click từng ngày và extract showtimes.
+    Dùng panel element để scope query, tránh nhầm với rạp khác.
     """
     total = 0
     today = datetime.now()
 
-    try:
-        await page.wait_for_selector(SEL_DATE_BTN, timeout=8000)
-    except Exception:
-        logger.warning(f"[ZaloPay] No date buttons for {cinema_name}")
+    # Scope date buttons vào date-selection slider (unique per panel)
+    date_slider = await panel.query_selector("div#date-selection")
+    scope = date_slider if date_slider else panel
+    date_btns = await scope.query_selector_all(SEL_DATE_BTN)
+    if not date_btns:
+        logger.warning(f"[ZaloPay] No date buttons in panel for {cinema_name}")
         return 0
 
-    date_btns = await page.query_selector_all(SEL_DATE_BTN)
     logger.info(f"  [ZaloPay] {cinema_name} — {len(date_btns)} dates")
 
     for i, date_btn in enumerate(date_btns):
         try:
-            # Lấy text ngày (p.heading-bold-small chứa số ngày)
             day_el = await date_btn.query_selector("p.heading-bold-small, p:last-child")
             day_text = (await day_el.inner_text()).strip() if day_el else ""
-            day_num = int(re.sub(r"\D", "", day_text)) if re.sub(r"\D", "", day_text) else 0
+            day_num_str = re.sub(r"\D", "", day_text)
+            day_num = int(day_num_str) if day_num_str else 0
 
             if day_num == 0:
                 continue
 
             date_str = _build_full_date(day_num, today)
 
-            await date_btn.click()
+            # Dùng JS click vì date buttons nằm trong Swiper slider (overflow hidden)
+            await date_btn.dispatch_event("click")
             await asyncio.sleep(1)
 
-            entries = await _extract_showtimes_from_panel(page, date_str, cinema_id, movie_id_map, chain=chain)
+            # Sau khi click, movie sections cập nhật trong panel
+            entries = await _extract_showtimes_from_panel(panel, date_str, cinema_id, movie_id_map, chain=chain)
 
             if entries:
                 await db.bulk_upsert_showtime_prices(entries, PLATFORM)
@@ -320,6 +335,10 @@ async def crawl_zalopay(context, db, city: str = CITY) -> None:
         if raw.get("id")
     }
 
+    # Xóa toàn bộ showtimes cũ (mock data) trước khi crawl mới
+    cleared = await db.clear_showtimes()
+    logger.info(f"[ZaloPay] Cleared {cleared} old showtimes before crawl")
+
     page = await context.new_page()
 
     try:
@@ -329,46 +348,58 @@ async def crawl_zalopay(context, db, city: str = CITY) -> None:
         await _ensure_city(page)
         await asyncio.sleep(2)
 
-        # Lấy các nhóm rạp (CGV, Lotte, Galaxy)
-        cinema_groups = await page.query_selector_all(SEL_CINEMA_GROUP)
-        group_names = []
-        for g in cinema_groups:
-            val = await g.get_attribute("data-gtm-movie-value") or ""
-            group_names.append(val)
-        logger.info(f"[ZaloPay] Cinema groups: {group_names}")
+        # Sau khi chọn city, tất cả rạp + showtimes đã hiển thị ngay
+        # Sidebar trái: span#movie-cinema-button — click để switch panel phải
+        try:
+            await page.wait_for_selector(SEL_CINEMA_ITEM, timeout=10000)
+        except Exception:
+            logger.warning("[ZaloPay] No cinema items found after city selection")
+            return
 
-        for gi, group_btn in enumerate(cinema_groups):
-            group_name = group_names[gi]
-            logger.info(f"\n[ZaloPay] ── Group: {group_name} ──")
+        # ── Lặp qua từng chain (CGV / Lotte / Galaxy Cinema) ─────────────────
+        # Mỗi chain button là <button class="relative mr-1 ...">
+        # chứa img[data-gtm-movie-value] bên trong.
+        # Click chain button → sidebar cập nhật span#movie-cinema-button cho chain đó.
+        chain_btns = await page.query_selector_all(SEL_CHAIN_BTN)
+        if not chain_btns:
+            logger.warning("[ZaloPay] No chain buttons found — falling back to current cinema list")
+            chain_btns = []  # will be handled below
 
+        chain_names = []
+        for btn in chain_btns:
+            img = await btn.query_selector(SEL_CINEMA_LOGO)
+            val = (await img.get_attribute("data-gtm-movie-value") or "").strip() if img else ""
+            chain_names.append(val)
+        logger.info(f"[ZaloPay] Chain buttons found: {chain_names}")
+
+        for chain_idx, chain_btn in enumerate(chain_btns):
+            chain = chain_names[chain_idx]
+            logger.info(f"\n[ZaloPay] ══ Chain [{chain_idx}]: {chain} ══")
+
+            # Click chain button để switch cinema list
             try:
-                await group_btn.click()
+                await chain_btn.dispatch_event("click")
                 await asyncio.sleep(1.5)
             except Exception as e:
-                logger.warning(f"[ZaloPay] Cannot click group {group_name}: {e}")
+                logger.warning(f"[ZaloPay] Cannot click chain button {chain!r}: {e}")
                 continue
 
-            # Lấy danh sách rạp trong group
+            # Lấy danh sách rạp của chain này
             cinema_spans = await page.query_selector_all(SEL_CINEMA_ITEM)
-            cinema_names = [(await s.inner_text()).strip() for s in cinema_spans]
-            logger.info(f"  [ZaloPay] Cinemas in {group_name}: {cinema_names}")
+            cinema_names_list = [(await s.inner_text()).strip() for s in cinema_spans]
+            logger.info(f"  [ZaloPay] Cinemas in {chain!r}: {cinema_names_list}")
 
-            for ci, cinema_name in enumerate(cinema_names):
+            if not cinema_names_list:
+                logger.warning(f"  [ZaloPay] No cinemas found for chain {chain!r}")
+                continue
+
+            for ci, cinema_name in enumerate(cinema_names_list):
                 if not cinema_name:
                     continue
 
-                # Upsert cinema doc
-                cinema_doc = {
-                    "id":      make_cinema_id(cinema_name),
-                    "name":    cinema_name,
-                    "address": "",
-                    "chain":   group_name,
-                    "city":    city,
-                }
-                await db.upsert_cinema(cinema_doc)
-                cinema_id = cinema_doc["id"]
+                logger.info(f"\n  [ZaloPay] ── Cinema [{ci}]: {cinema_name} ──")
 
-                # Click vào rạp cụ thể
+                # Click cinema item để activate panel phải
                 try:
                     spans = await page.query_selector_all(SEL_CINEMA_ITEM)
                     if ci >= len(spans):
@@ -376,12 +407,51 @@ async def crawl_zalopay(context, db, city: str = CITY) -> None:
                     await spans[ci].click()
                     await asyncio.sleep(1.5)
                 except Exception as e:
-                    logger.warning(f"  [ZaloPay] Cannot click cinema {cinema_name}: {e}")
+                    logger.warning(f"    [ZaloPay] Cannot click cinema {cinema_name}: {e}")
                     continue
 
-                # Crawl từng ngày
-                total = await _crawl_cinema_dates(page, cinema_id, cinema_name, movie_id_map, db, chain=group_name)
-                logger.info(f"  [ZaloPay] {cinema_name} → {total} total showtimes")
+                # Đợi panel active xuất hiện
+                try:
+                    await page.wait_for_selector(SEL_CINEMA_PANEL, timeout=8000)
+                except Exception:
+                    logger.warning(f"    [ZaloPay] Panel not found for {cinema_name}")
+                    continue
+
+                panel = await page.query_selector(SEL_CINEMA_PANEL)
+                if not panel:
+                    logger.warning(f"    [ZaloPay] Cannot get panel element for {cinema_name}")
+                    continue
+
+                # Lấy địa chỉ từ cinema card (scoped vào lg:hidden ancestor của date-selection)
+                # div#date-selection → parent(relative) → parent(lg:hidden) → label.text-dark-300
+                address = await page.evaluate("""
+                    () => {
+                        const dateSel = document.querySelector('div#date-selection');
+                        if (!dateSel) return '';
+                        // Go up to lg:hidden ancestor (2 levels up from date-selection)
+                        const card = dateSel.parentElement?.parentElement;
+                        if (!card) return '';
+                        const lbl = card.querySelector('label.text-dark-300');
+                        return lbl ? lbl.innerText.trim() : '';
+                    }
+                """)
+
+                cinema_doc = {
+                    "id":      make_cinema_id(cinema_name),
+                    "name":    cinema_name,
+                    "address": address,
+                    "chain":   chain,
+                    "city":    city,
+                }
+                await db.upsert_cinema(cinema_doc)
+                cinema_id = cinema_doc["id"]
+                logger.info(f"    [ZaloPay] chain={chain!r} address={address[:50]!r}")
+
+                # Crawl từng ngày trong panel
+                total = await _crawl_cinema_dates_in_panel(
+                    panel, page, cinema_id, cinema_name, movie_id_map, db, chain=chain
+                )
+                logger.info(f"    [ZaloPay] {cinema_name} → {total} total showtimes")
 
     except Exception as e:
         logger.error(f"[ZaloPay] Crawl error: {e}", exc_info=True)

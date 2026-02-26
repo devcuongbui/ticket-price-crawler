@@ -5,8 +5,13 @@ Target: https://www.momo.vn/cinema/lich-chieu#phimdangchieu
 Dùng Playwright thao tác DOM để lấy suất chiếu và giá vé từ MoMo.
 Chỉ cập nhật prices.momo trong showtimes collection.
 """
+from __future__ import annotations
 import asyncio
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from playwright.async_api import Page
 
 from crawler.transformer import transform_movie, transform_cinema, transform_showtime
 from crawler.interceptor import ApiInterceptor
