@@ -30,6 +30,13 @@ ZALOPAY_URL = "https://zalopay.vn/dat-ve-phim"
 PLATFORM = "zalopay"
 CITY = "Hải Phòng"
 
+# Giá tạm theo chain (chưa crawl được giá thực từ trang đặt vé)
+_CHAIN_FAKE_PRICE = {
+    "CGV":            90_000,
+    "Lotte":          60_000,
+    "Galaxy Cinema":  65_000,
+}
+
 # ── Selectors (từ HTML thực tế) ────────────────────────────────────────────────
 # City
 SEL_CITY_BTN       = "button:has(p.text-blue-500)"           # button thành phố đang chọn
@@ -153,12 +160,14 @@ async def _ensure_city(page) -> bool:
 
 # ── Showtime extraction ────────────────────────────────────────────────────────
 
-async def _extract_showtimes_from_panel(page, date_str: str, cinema_id: str, movie_id_map: dict) -> list[dict]:
+async def _extract_showtimes_from_panel(page, date_str: str, cinema_id: str, movie_id_map: dict, chain: str = "") -> list[dict]:
     """
     Đọc toàn bộ movie sections trong panel phải cho một ngày đã chọn.
     movie_id_map: {api_id_str: movie_doc_id}  e.g. {"5094": "movie-5094"}
+    chain: tên chain để tra giá fake (CGV / Lotte / Galaxy Cinema)
     Trả về list entries cho bulk_upsert_showtime_prices.
     """
+    fake_price = _CHAIN_FAKE_PRICE.get(chain)
     entries = []
     await asyncio.sleep(1.2)
 
@@ -228,7 +237,7 @@ async def _extract_showtimes_from_panel(page, date_str: str, cinema_id: str, mov
                             "time":        time_val,
                             "format":      fmt,
                             "seat_type":   seat_type,
-                            "price":       None,  # giá sẽ lấy khi click vào session
+                            "price":       fake_price,
                         })
 
                     except Exception as e:
@@ -242,7 +251,7 @@ async def _extract_showtimes_from_panel(page, date_str: str, cinema_id: str, mov
 
 # ── Date iteration ─────────────────────────────────────────────────────────────
 
-async def _crawl_cinema_dates(page, cinema_id: str, cinema_name: str, movie_id_map: dict, db) -> int:
+async def _crawl_cinema_dates(page, cinema_id: str, cinema_name: str, movie_id_map: dict, db, chain: str = "") -> int:
     """
     Lấy tất cả date buttons, click từng cái và extract showtimes.
     Trả về tổng số showtime entries đã lưu.
@@ -274,7 +283,7 @@ async def _crawl_cinema_dates(page, cinema_id: str, cinema_name: str, movie_id_m
             await date_btn.click()
             await asyncio.sleep(1)
 
-            entries = await _extract_showtimes_from_panel(page, date_str, cinema_id, movie_id_map)
+            entries = await _extract_showtimes_from_panel(page, date_str, cinema_id, movie_id_map, chain=chain)
 
             if entries:
                 await db.bulk_upsert_showtime_prices(entries, PLATFORM)
@@ -371,7 +380,7 @@ async def crawl_zalopay(context, db, city: str = CITY) -> None:
                     continue
 
                 # Crawl từng ngày
-                total = await _crawl_cinema_dates(page, cinema_id, cinema_name, movie_id_map, db)
+                total = await _crawl_cinema_dates(page, cinema_id, cinema_name, movie_id_map, db, chain=group_name)
                 logger.info(f"  [ZaloPay] {cinema_name} → {total} total showtimes")
 
     except Exception as e:
