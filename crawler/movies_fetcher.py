@@ -54,7 +54,7 @@ async def fetch_and_replace_movies(db) -> tuple[int, int]:
         logger.warning("[MoviesFetcher] No movies returned from API")
         return 0, 0
 
-    docs = [d for raw in movies_raw if (d := transform_movie(raw))]
+    docs = [d for i, raw in enumerate(movies_raw) if (d := transform_movie(raw, order=i))]
     logger.info(f"[MoviesFetcher] Transformed {len(docs)}/{len(movies_raw)} movies")
 
     deleted, inserted = await db.replace_all_movies(docs)

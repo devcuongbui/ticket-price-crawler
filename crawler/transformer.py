@@ -157,7 +157,7 @@ def _get(d: dict, *keys, default=""):
 
 # ── Transform functions ───────────────────────────────────────────────────────
 
-def transform_movie(raw: dict) -> dict | None:
+def transform_movie(raw: dict, order: int = 0) -> dict | None:
     """
     Raw API/DOM data → movies document.
     Trả về dict với 'id' field (string slug), KHÔNG có '_id'.
@@ -198,6 +198,7 @@ def transform_movie(raw: dict) -> dict | None:
         "poster":   poster,
         "rating":   rating,
         "status":   "now_showing",
+        "order":    order,  # thứ tự từ API response (0 = ưu tiên cao nhất)
     }
 
 

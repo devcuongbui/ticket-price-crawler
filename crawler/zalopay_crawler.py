@@ -43,7 +43,7 @@ async def crawl_zalopay(context, db, city: str = "Hải Phòng") -> None:
         await asyncio.sleep(2)
 
         # Transform + replace toàn bộ movies collection
-        movie_pairs = [(transform_movie(raw), raw) for raw in movies_raw]
+        movie_pairs = [(transform_movie(raw, order=i), raw) for i, raw in enumerate(movies_raw)]
         movie_pairs = [(doc, raw) for doc, raw in movie_pairs if doc]
         deleted, inserted = await db.replace_all_movies([doc for doc, _ in movie_pairs])
         logger.info(f"[ZaloPay] Movies — deleted={deleted}, inserted={inserted}")
